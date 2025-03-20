@@ -5,6 +5,10 @@ This project utilizes an ESP32 module powered by an 18650 battery to measure the
 
 The primary goal is to detect stagnation in weight, indicating dryness of the plant. Once stagnation is detected, the flag `wateringNeeded` becomes `true`. You can monitor this status and the sensor data remotely via ThingSpeak.
 
+Here you can see when the stagnation detection triggers, from this point onward, watering is required.
+![Screenshot_20250317_212809_ChatGPT](https://github.com/user-attachments/assets/aa46c1f1-6518-4172-9a7d-451d4b113ce9)
+
+
 ---
 
 ## ⚙️ Features
@@ -89,3 +93,6 @@ Feel free to submit issues, feature requests, or pull requests. Your contributio
 
 📬 **Contact**
 For questions or support, please open an issue or reach out directly through GitHub.
+
+Screenshot from Data:
+![Screenshot_20250320_090905_ThingShow](https://github.com/user-attachments/assets/68b1a571-a99b-4bf6-b867-6caf23a9de04)
