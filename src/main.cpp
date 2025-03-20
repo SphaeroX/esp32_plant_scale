@@ -29,23 +29,53 @@
 #define HISTORY_SIZE 5          // Number of stored weight values for evaluation
 #define IGNORE_FIRST_READINGS 3 // Number of initial measurements to ignore after startup
 
-RTC_DATA_ATTR bool firstBoot = true;
-
 // Array for storing recent weight measurements
 RTC_DATA_ATTR float weightHistory[HISTORY_SIZE] = {0};
 RTC_DATA_ATTR int historyIndex = 0;
 RTC_DATA_ATTR int readingCount = 0;      // Tracks the number of recorded measurements
 RTC_DATA_ATTR bool historyReady = false; // Set to true when the array is fully populated for the first time
 
-// Stagnation detection settings
-float aggressivenessFactor = 2.0; // Adjustable factor for stagnation sensitivity
-float stagnationThreshold = 0.2;  // Threshold in grams for detecting stagnation
-float resetThreshold = 300.0;     // Weight increase threshold to reset marker
-bool wateringNeeded = false;      // Marker for watering requirement
-
 // Temperature compensation constants
 const float TEMP_COEFF = -0.0171;  // Temperature coefficient (per °C)
 const float REFERENCE_TEMP = 22.0; // Reference temperature in °C
+
+// Stagnation detection settings
+float aggressivenessFactor = 1.0; // Adjustable factor for stagnation sensitivity
+float stagnationThreshold = 0.5;  // Threshold in grams for detecting stagnation
+float resetThreshold = 300.0;     // Weight increase threshold to reset marker
+bool wateringNeeded = false;      // Marker for watering requirement
+
+/*
+Stagnation Detection Tuning:
+----------------------------------
+aggressivenessFactor (float):
+- Sensitivity multiplier for detection
+- >1.0 = More sensitive (earlier detection)
+- <1.0 = More tolerant (requires bigger change)
+- Typical: 0.5-3.0
+
+stagnationThreshold (float) [grams]:
+- Minimum expected weight change per SLEEP_TIME interval
+- Set to smallest meaningful change to detect
+- Based on sensor accuracy & system behavior
+
+Example (15-minute intervals):
+Normal operation: ~2g decrease per interval
+To detect when decrease <0.5g:
+stagnationThreshold = 0.5  // Minimum interesting change
+aggressivenessFactor = 1.0  // Use threshold directly
+Detection: (ActualChange < 0.5 * 1.0) → Stagnation
+
+Tuning Steps:
+1. Set threshold = minimum change worth detecting
+2. Adjust factor based on false positives/negatives
+*/
+
+RTC_DATA_ATTR float referenceAvgWeight = 0.0;
+RTC_DATA_ATTR bool stagnationMode = false;
+RTC_DATA_ATTR bool isFirstEvaluation = true;
+
+RTC_DATA_ATTR bool firstBoot = true;
 
 // Global variables
 float calibrationFactor = 1.0;
@@ -58,8 +88,8 @@ Adafruit_BME280 bme;
 // Function prototypes
 bool waitForScaleReady(unsigned long timeoutMillis);
 float getFilteredWeight();
-float addWeightAndGetAverage(float newWeight);
-void checkForStagnation(float weight);
+void addWeightToHistory(float newWeight);
+void checkForStagnation();
 void showMenu();
 void calibrateScale();
 void setTare();
@@ -82,94 +112,85 @@ bool waitForScaleReady(unsigned long timeoutMillis)
   return false;
 }
 
-/*
-example
-This function simply averages multiple HX711 readings without outlier filtering.
-*/
 float getFilteredWeight()
 {
   return (scale.get_units(NUM_MEASUREMENTS));
 }
 
-float addWeightAndGetAverage(float newWeight)
+void addWeightToHistory(float weight)
 {
-  // Add measurement to history array
-  weightHistory[historyIndex] = newWeight;
+  weightHistory[historyIndex] = weight;
   historyIndex = (historyIndex + 1) % HISTORY_SIZE;
-
-  // Increase measurement counter
   readingCount++;
 
-  // Check if the array has been fully populated for the first time
   if (historyIndex == 0 && !historyReady)
   {
     historyReady = true;
   }
-
-  // Calculate average only if sufficient valid measurements are available
-  if (historyReady && readingCount > IGNORE_FIRST_READINGS)
-  {
-    float sum = 0;
-    for (int i = 0; i < HISTORY_SIZE; i++)
-    {
-      sum += weightHistory[i];
-    }
-    return sum / HISTORY_SIZE;
-  }
-
-  return NAN; // Return Not-A-Number if there is not enough data yet
 }
 
-void checkForStagnation(float weight)
+void checkForStagnation()
 {
-  static float lastAvgWeight = weight;
-  static bool isFirstValidReading = true;
-
-  // Add new weight value to average calculation
-  float avgWeight = addWeightAndGetAverage(weight);
-
-  // Check if a valid average was calculated
-  if (!isnan(avgWeight))
+  // Prüfe ob genug Daten vorhanden sind
+  if (!historyReady || readingCount <= IGNORE_FIRST_READINGS)
   {
-    // For the first valid average, only set the reference value
-    if (isFirstValidReading)
+    Serial.println("Initialisierungsphase: " + String(readingCount) + "/" +
+                   String(IGNORE_FIRST_READINGS + HISTORY_SIZE));
+    return;
+  }
+
+  // Berechne gleitenden Durchschnitt
+  float sum = 0;
+  for (int i = 0; i < HISTORY_SIZE; i++)
+  {
+    sum += weightHistory[i];
+  }
+  float currentAvg = sum / HISTORY_SIZE;
+
+  // Erste gültige Auswertung
+  if (isFirstEvaluation)
+  {
+    referenceAvgWeight = currentAvg;
+    isFirstEvaluation = false;
+    Serial.println("Erste stabile Basis: " + String(referenceAvgWeight, 1) + " g");
+    return;
+  }
+
+  // Stagnationsmodus-Logik
+  if (stagnationMode)
+  {
+    float diff = currentAvg - referenceAvgWeight;
+
+    if (diff > resetThreshold)
     {
-      lastAvgWeight = avgWeight;
-      isFirstValidReading = false;
-      Serial.println("First valid average weight measurement: " + String(avgWeight, 1) + " g");
-      return;
+      stagnationMode = false;
+      wateringNeeded = false;
+      Serial.println("Reset durch Gewichtsanstieg: " + String(diff, 1) + " g");
     }
-
-    // Perform normal stagnation detection
-    float weightDiff = lastAvgWeight - avgWeight;
-
-    Serial.print("Current avg weight: ");
-    Serial.print(avgWeight, 1);
-    Serial.print(" g, diff: ");
-    Serial.print(weightDiff, 2);
-    Serial.println(" g");
-
-    if (abs(weightDiff) < stagnationThreshold * aggressivenessFactor)
+    else if (abs(diff) < stagnationThreshold * aggressivenessFactor)
     {
       wateringNeeded = true;
-      Serial.println("Stagnation detected! Watering recommended.");
+      Serial.println("Anhaltende Stagnation: Δ" + String(diff, 1) + " g");
     }
-    else if (avgWeight - lastAvgWeight > resetThreshold)
-    {
-      wateringNeeded = false;
-      Serial.println("Weight increase detected, resetting watering marker.");
-    }
-
-    lastAvgWeight = avgWeight;
   }
   else
   {
-    Serial.println("Still collecting initial readings... (" +
-                   String(readingCount) + "/" +
-                   String(HISTORY_SIZE + IGNORE_FIRST_READINGS) + ")");
+    float diff = referenceAvgWeight - currentAvg;
+
+    if (abs(diff) < stagnationThreshold * aggressivenessFactor)
+    {
+      stagnationMode = true;
+      wateringNeeded = true;
+      Serial.println("Stagnation erkannt! Referenz: " + String(currentAvg, 1) + " g");
+      referenceAvgWeight = currentAvg;
+    }
+    else
+    {
+      referenceAvgWeight = currentAvg;
+      Serial.println("Normalbereich: " + String(currentAvg, 1) + " g");
+    }
   }
 }
-
 // Display the main menu via Serial
 void showMenu()
 {
@@ -463,7 +484,9 @@ void loop()
   {
     // Get calibrated weight reading (tare is already subtracted)
     float weight = getFilteredWeight();
-    checkForStagnation(weight);
+
+    addWeightToHistory(weight);
+    checkForStagnation();
 
     // Read sensor values from BME280
     float temperature = bme.readTemperature();
