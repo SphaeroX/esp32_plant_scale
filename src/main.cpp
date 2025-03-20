@@ -39,12 +39,6 @@ RTC_DATA_ATTR bool historyReady = false; // Set to true when the array is fully 
 const float TEMP_COEFF = -0.0171;  // Temperature coefficient (per °C)
 const float REFERENCE_TEMP = 22.0; // Reference temperature in °C
 
-// Stagnation detection settings
-float aggressivenessFactor = 1.0; // Adjustable factor for stagnation sensitivity
-float stagnationThreshold = 0.5;  // Threshold in grams for detecting stagnation
-float resetThreshold = 300.0;     // Weight increase threshold to reset marker
-bool wateringNeeded = false;      // Marker for watering requirement
-
 /*
 Stagnation Detection Tuning:
 ----------------------------------
@@ -71,11 +65,17 @@ Tuning Steps:
 2. Adjust factor based on false positives/negatives
 */
 
+// Stagnation detection settings
+float aggressivenessFactor = 1.0; // Adjustable factor for stagnation sensitivity
+float stagnationThreshold = 0.5;  // Threshold in grams for detecting stagnation
+float resetThreshold = 300.0;     // Weight increase threshold to reset marker
+
 RTC_DATA_ATTR float referenceAvgWeight = 0.0;
 RTC_DATA_ATTR bool stagnationMode = false;
 RTC_DATA_ATTR bool isFirstEvaluation = true;
-
 RTC_DATA_ATTR bool firstBoot = true;
+
+bool wateringNeeded = false; // Marker for watering requirement
 
 // Global variables
 float calibrationFactor = 1.0;
@@ -131,15 +131,15 @@ void addWeightToHistory(float weight)
 
 void checkForStagnation()
 {
-  // Prüfe ob genug Daten vorhanden sind
+  // Check if enough data is available
   if (!historyReady || readingCount <= IGNORE_FIRST_READINGS)
   {
-    Serial.println("Initialisierungsphase: " + String(readingCount) + "/" +
+    Serial.println("Initialization phase: " + String(readingCount) + "/" +
                    String(IGNORE_FIRST_READINGS + HISTORY_SIZE));
     return;
   }
 
-  // Berechne gleitenden Durchschnitt
+  // Calculate moving average
   float sum = 0;
   for (int i = 0; i < HISTORY_SIZE; i++)
   {
@@ -147,16 +147,16 @@ void checkForStagnation()
   }
   float currentAvg = sum / HISTORY_SIZE;
 
-  // Erste gültige Auswertung
+  // First valid evaluation
   if (isFirstEvaluation)
   {
     referenceAvgWeight = currentAvg;
     isFirstEvaluation = false;
-    Serial.println("Erste stabile Basis: " + String(referenceAvgWeight, 1) + " g");
+    Serial.println("First stable baseline: " + String(referenceAvgWeight, 1) + " g");
     return;
   }
 
-  // Stagnationsmodus-Logik
+  // Stagnation mode logic
   if (stagnationMode)
   {
     float diff = currentAvg - referenceAvgWeight;
@@ -165,12 +165,12 @@ void checkForStagnation()
     {
       stagnationMode = false;
       wateringNeeded = false;
-      Serial.println("Reset durch Gewichtsanstieg: " + String(diff, 1) + " g");
+      Serial.println("Reset due to weight increase: " + String(diff, 1) + " g");
     }
     else if (abs(diff) < stagnationThreshold * aggressivenessFactor)
     {
       wateringNeeded = true;
-      Serial.println("Anhaltende Stagnation: Δ" + String(diff, 1) + " g");
+      Serial.println("Persistent stagnation: Δ" + String(diff, 1) + " g");
     }
   }
   else
@@ -181,16 +181,17 @@ void checkForStagnation()
     {
       stagnationMode = true;
       wateringNeeded = true;
-      Serial.println("Stagnation erkannt! Referenz: " + String(currentAvg, 1) + " g");
+      Serial.println("Stagnation detected! Reference: " + String(currentAvg, 1) + " g");
       referenceAvgWeight = currentAvg;
     }
     else
     {
       referenceAvgWeight = currentAvg;
-      Serial.println("Normalbereich: " + String(currentAvg, 1) + " g");
+      Serial.println("Normal range: " + String(currentAvg, 1) + " g");
     }
   }
 }
+
 // Display the main menu via Serial
 void showMenu()
 {
@@ -536,9 +537,9 @@ void loop()
   client.stop();
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
-  btStop();
   Serial.end();
   Wire.end();
+  btStop();
   delay(100);
 
   // Enable lowest power consumption mode
