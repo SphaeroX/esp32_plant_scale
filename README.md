@@ -19,10 +19,6 @@ Here you can see when the stagnation detection triggers, from this point onward,
   - `stagnationThreshold`: Sensitivity for stagnation detection.
   - `aggressivenessFactor`: Adjusts stagnation detection aggressiveness.
   - `resetThreshold`: Weight increase (in grams) needed to automatically reset the watering alert (default: 300 grams).
-- **Temperature Compensation**: Adjust weight measurement accuracy using:
-  - `TEMP_COEFF`: Coefficient for temperature compensation.
-  - `REFERENCE_TEMP`: Reference temperature for weight compensation.
-
 ---
 
 ## 🛠️ Setup Instructions
@@ -56,9 +52,12 @@ git clone <your-repo-url>
 ## 📊 Data Visualization with ThingSpeak
 - Create a free account at [ThingSpeak](https://thingspeak.com).
 - Monitor sensor data and plant watering status online.
-- Field 6 indicates the watering status:
-  - `0`: No watering needed
-  - `1`: Watering required
+- ThingSpeak field descriptions:
+  - **Field 1**: Plant weight in grams
+  - **Field 2**: Temperature in °C
+  - **Field 3**: Humidity in %
+  - **Field 4**: Air pressure in hPa
+  - **Field 5**: Watering status (0: No watering needed, 1: Watering required)
 
 ---
 

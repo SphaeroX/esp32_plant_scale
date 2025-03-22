@@ -35,10 +35,6 @@ RTC_DATA_ATTR int historyIndex = 0;
 RTC_DATA_ATTR int readingCount = 0;      // Tracks the number of recorded measurements
 RTC_DATA_ATTR bool historyReady = false; // Set to true when the array is fully populated for the first time
 
-// Temperature compensation constants
-const float TEMP_COEFF = -0.0171;  // Temperature coefficient (per °C)
-const float REFERENCE_TEMP = 22.0; // Reference temperature in °C
-
 /*
 Stagnation Detection Tuning:
 ----------------------------------
@@ -64,7 +60,6 @@ Tuning Steps:
 1. Set threshold = minimum change worth detecting
 2. Adjust factor based on false positives/negatives
 */
-
 // Stagnation detection settings
 float aggressivenessFactor = 1.0; // Adjustable factor for stagnation sensitivity
 float stagnationThreshold = 0.5;  // Threshold in grams for detecting stagnation
@@ -308,9 +303,6 @@ void showSensorData()
     float temperature = bme.readTemperature();
     float humidity = bme.readHumidity();
     float pressure = bme.readPressure() / 100.0F;
-    // Apply temperature compensation to the weight reading
-    float compensation = 1.0 + TEMP_COEFF * (temperature - REFERENCE_TEMP);
-    float compensatedWeight = rawValue / compensation;
 
     Serial.print("HX711 scale.get_units(5): ");
     Serial.println(scale.get_units(5), 3);
@@ -318,10 +310,6 @@ void showSensorData()
     Serial.print("Load cell raw data (average): ");
     Serial.print(rawValue, 3);
     Serial.println(" (calibrated units)");
-
-    Serial.print("Calculated weight (temperature compensated): ");
-    Serial.print(compensatedWeight, 3);
-    Serial.println(" g");
 
     Serial.print("Temperature: ");
     Serial.print(temperature, 2);
@@ -494,12 +482,8 @@ void loop()
     float humidity = bme.readHumidity();
     float pressure = bme.readPressure() / 100.0F;
 
-    // Apply temperature compensation
-    float compensation = 1.0 + TEMP_COEFF * (temperature - REFERENCE_TEMP);
-    float compensatedWeight = weight / compensation;
-
-    Serial.print("Filtered weight (calibrated and temperature compensated): ");
-    Serial.print(compensatedWeight, 1);
+    Serial.print("Weight: ");
+    Serial.print(weight, 1);
     Serial.println(" g");
 
     Serial.print("Measured temperature: ");
@@ -507,12 +491,11 @@ void loop()
     Serial.println(" °C");
 
     // Send data to ThingSpeak (Field 1: weight, Field 2: temperature, etc.)
-    ThingSpeak.setField(1, compensatedWeight);
+    ThingSpeak.setField(1, weight);
     ThingSpeak.setField(2, temperature);
     ThingSpeak.setField(3, humidity);
     ThingSpeak.setField(4, pressure);
-    ThingSpeak.setField(5, weight);
-    ThingSpeak.setField(6, wateringNeeded ? 1 : 0);
+    ThingSpeak.setField(5, wateringNeeded ? 1 : 0);
     ThingSpeak.writeFields(channelID, apiKey);
   }
   else
