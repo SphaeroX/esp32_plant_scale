@@ -9,7 +9,6 @@
 #include <Wire.h>
 #include <ArduinoOTA.h>
 #include <esp_adc_cal.h>
-#include <TFT_eSPI.h> // Added library for Lilygo T-Display
 
 // Track if this is the first boot since power-on
 RTC_DATA_ATTR bool firstBoot = true;
