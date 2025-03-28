@@ -1,375 +1,56 @@
 #include <Arduino.h>
-#include <WiFi.h>
-#include <ThingSpeak.h>
 #include <EEPROM.h>
 #include "cred.h"
-#include "HX711.h"
-#include <Adafruit_BME280.h>
+#include "config.h"
+#include "sensors.h"
+#include "network.h"
+#include "menu.h"
+#include "eeprom_handler.h"
 #include <Wire.h>
-#include <math.h>
+#include <ArduinoOTA.h>
+#include <esp_adc_cal.h>
+#include <TFT_eSPI.h> // Added library for Lilygo T-Display
 
-// Define GPIO pins for HX711
-#define DOUT_PIN 32
-#define SCK_PIN 33
-
-// Define custom I²C pins
-#define SDA_PIN 26 // Alternate SDA pin
-#define SCL_PIN 27 // Alternate SCL pin
-
-// Deep Sleep time in seconds
-#define SLEEP_TIME 900 // 15 minutes
-
-// EEPROM definitions (8 bytes: 4 for tare offset, 4 for calibration factor)
-#define EEPROM_SIZE 8
-#define EEPROM_TARE_ADDR 0
-#define EEPROM_CALIB_ADDR 4
-
-// Measurement settings
-#define NUM_MEASUREMENTS 10     // Number of measurements per weight value
-#define HISTORY_SIZE 5          // Number of stored weight values for evaluation
-#define IGNORE_FIRST_READINGS 3 // Number of initial measurements to ignore after startup
-
-// Array for storing recent weight measurements
-RTC_DATA_ATTR float weightHistory[HISTORY_SIZE] = {0};
-RTC_DATA_ATTR int historyIndex = 0;
-RTC_DATA_ATTR int readingCount = 0;      // Tracks the number of recorded measurements
-RTC_DATA_ATTR bool historyReady = false; // Set to true when the array is fully populated for the first time
-
-/*
-Stagnation Detection Tuning:
-----------------------------------
-aggressivenessFactor (float):
-- Sensitivity multiplier for detection
-- >1.0 = More sensitive (earlier detection)
-- <1.0 = More tolerant (requires bigger change)
-- Typical: 0.5-3.0
-
-stagnationThreshold (float) [grams]:
-- Minimum expected weight change per SLEEP_TIME interval
-- Set to smallest meaningful change to detect
-- Based on sensor accuracy & system behavior
-
-Example (15-minute intervals):
-Normal operation: ~2g decrease per interval
-To detect when decrease <0.5g:
-stagnationThreshold = 0.5  // Minimum interesting change
-aggressivenessFactor = 1.0  // Use threshold directly
-Detection: (ActualChange < 0.5 * 1.0) → Stagnation
-
-Tuning Steps:
-1. Set threshold = minimum change worth detecting
-2. Adjust factor based on false positives/negatives
-*/
-// Stagnation detection settings
-float aggressivenessFactor = 1.0; // Adjustable factor for stagnation sensitivity
-float stagnationThreshold = 0.5;  // Threshold in grams for detecting stagnation
-float resetThreshold = 300.0;     // Weight increase threshold to reset marker
-
-RTC_DATA_ATTR float referenceAvgWeight = 0.0;
-RTC_DATA_ATTR bool stagnationMode = false;
-RTC_DATA_ATTR bool isFirstEvaluation = true;
+// Track if this is the first boot since power-on
 RTC_DATA_ATTR bool firstBoot = true;
 
-bool wateringNeeded = false; // Marker for watering requirement
+// Global flag for stagnation detection
+bool stagnationDetected = false;
 
-// Global variables
-float calibrationFactor = 1.0;
-float tareOffset = 0.0;
-
-HX711 scale;
-WiFiClient client;
-Adafruit_BME280 bme;
-
-// Function prototypes
-bool waitForScaleReady(unsigned long timeoutMillis);
-float getFilteredWeight();
-void addWeightToHistory(float newWeight);
-void checkForStagnation();
-void showMenu();
-void calibrateScale();
-void setTare();
-void clearEEPROM();
-void showSensorData();
-void menuLoop();
-
-// Wait for the scale to be ready up to a timeout
-bool waitForScaleReady(unsigned long timeoutMillis)
+// Function to read battery voltage
+float readBatteryVoltage()
 {
-  unsigned long startTime = millis();
-  while (millis() - startTime < timeoutMillis)
+  // Calculate battery voltage
+  float batteryVoltage = (float)(analogRead(PIN_BAT_VOLT)) * 3600 / 4095 * 2;
+
+  if (batteryVoltage > 4300)
   {
-    if (scale.is_ready())
-    {
-      return true;
-    }
-    delay(10);
-  }
-  return false;
-}
-
-float getFilteredWeight()
-{
-  return (scale.get_units(NUM_MEASUREMENTS));
-}
-
-void addWeightToHistory(float weight)
-{
-  weightHistory[historyIndex] = weight;
-  historyIndex = (historyIndex + 1) % HISTORY_SIZE;
-  readingCount++;
-
-  if (historyIndex == 0 && !historyReady)
-  {
-    historyReady = true;
-  }
-}
-
-void checkForStagnation()
-{
-  // Check if enough data is available
-  if (!historyReady || readingCount <= IGNORE_FIRST_READINGS)
-  {
-    Serial.println("Initialization phase: " + String(readingCount) + "/" +
-                   String(IGNORE_FIRST_READINGS + HISTORY_SIZE));
-    return;
-  }
-
-  // Calculate moving average
-  float sum = 0;
-  for (int i = 0; i < HISTORY_SIZE; i++)
-  {
-    sum += weightHistory[i];
-  }
-  float currentAvg = sum / HISTORY_SIZE;
-
-  // First valid evaluation
-  if (isFirstEvaluation)
-  {
-    referenceAvgWeight = currentAvg;
-    isFirstEvaluation = false;
-    Serial.println("First stable baseline: " + String(referenceAvgWeight, 1) + " g");
-    return;
-  }
-
-  // Stagnation mode logic
-  if (stagnationMode)
-  {
-    float diff = currentAvg - referenceAvgWeight;
-
-    if (diff > resetThreshold)
-    {
-      stagnationMode = false;
-      wateringNeeded = false;
-      Serial.println("Reset due to weight increase: " + String(diff, 1) + " g");
-    }
-    else if (abs(diff) < stagnationThreshold * aggressivenessFactor)
-    {
-      wateringNeeded = true;
-      Serial.println("Persistent stagnation: Δ" + String(diff, 1) + " g");
-    }
+    return 0;
   }
   else
   {
-    float diff = referenceAvgWeight - currentAvg;
-
-    if (abs(diff) < stagnationThreshold * aggressivenessFactor)
-    {
-      stagnationMode = true;
-      wateringNeeded = true;
-      Serial.println("Stagnation detected! Reference: " + String(currentAvg, 1) + " g");
-      referenceAvgWeight = currentAvg;
-    }
-    else
-    {
-      referenceAvgWeight = currentAvg;
-      Serial.println("Normal range: " + String(currentAvg, 1) + " g");
-    }
+    return batteryVoltage;
   }
 }
 
-// Display the main menu via Serial
-void showMenu()
+void setupOTA()
 {
-  Serial.println("\n=== Main Menu ===");
-  Serial.println("1 - Calibrate");
-  Serial.println("2 - Tare");
-  Serial.println("3 - Clear EEPROM");
-  Serial.println("4 - Display all sensor data");
-  Serial.println("5 - Exit");
-  Serial.println("Please enter an option:");
-}
-
-// Calibrate the scale using a known weight
-void calibrateScale()
-{
-  Serial.println("Calibration mode activated.");
-  Serial.println("Ensure the scale is empty. Press any key when ready.");
-  while (Serial.available() == 0)
-  {
-    // Waiting for user input
-  }
-  while (Serial.available() > 0)
-  {
-    Serial.read();
-  }
-
-  // Reset scale factor and tare the scale
-  scale.set_scale();
-  scale.tare();
-  Serial.println("Scale set to zero. Now place a known weight on the scale and enter the weight in grams.");
-  while (Serial.available() == 0)
-  {
-    // Waiting for user input
-  }
-  float knownWeight = Serial.parseFloat();
-  while (Serial.available() > 0)
-  {
-    Serial.read();
-  }
-
-  if (knownWeight <= 0)
-  {
-    Serial.println("Invalid input for known weight.");
-    return;
-  }
-  else
-  {
-    Serial.print("Known weight: ");
-    Serial.print(knownWeight);
-    Serial.println(" g");
-  }
-
-  // Wait for the reading to stabilize
-  delay(1000);
-  float reading = scale.get_units(10);
-  Serial.print("Measured weight with known load: ");
-  Serial.println(reading, 3);
-
-  // Calculate calibration factor: (measured reading) / (known weight)
-  calibrationFactor = reading / knownWeight;
-  scale.set_scale(calibrationFactor);
-  EEPROM.put(EEPROM_CALIB_ADDR, calibrationFactor);
-  EEPROM.commit();
-
-  Serial.print("Calibration completed. New calibration factor: ");
-  Serial.println(calibrationFactor, 6);
-}
-
-// Tare the scale and store the tare offset in EEPROM
-void setTare()
-{
-  Serial.println("Taring... Please remove any load from the scale.");
-  if (waitForScaleReady(5000))
-  {
-    // Get the current raw reading (without calibration factor)
-    long rawReading = scale.read_average(10);
-    // Store this value as the offset
-    scale.set_offset(rawReading);
-    // Save the offset for future use
-    tareOffset = rawReading;
-    EEPROM.put(EEPROM_TARE_ADDR, tareOffset);
-    EEPROM.commit();
-    Serial.print("Taring completed. New offset saved: ");
-    Serial.println(tareOffset, 3);
-  }
-  else
-  {
-    Serial.println("Error: HX711 not ready!");
-  }
-}
-
-// Clear stored EEPROM values for tare offset and calibration factor
-void clearEEPROM()
-{
-  Serial.println("Clearing EEPROM...");
-  float resetVal = 0.0;
-  EEPROM.put(EEPROM_TARE_ADDR, resetVal);
-  EEPROM.put(EEPROM_CALIB_ADDR, 1.0);
-  EEPROM.commit();
-  tareOffset = resetVal;
-  calibrationFactor = 1.0;
-  Serial.println("EEPROM cleared!");
-}
-
-// Display all sensor data: load cell raw data, calculated weight, and BME280 readings
-void showSensorData()
-{
-  Serial.println("\n=== Sensor Data ===");
-  if (waitForScaleReady(5000))
-  {
-    // Get raw reading from the load cell (already averaged)
-    float rawValue = getFilteredWeight();
-    // Read temperature, humidity, and pressure from BME280
-    float temperature = bme.readTemperature();
-    float humidity = bme.readHumidity();
-    float pressure = bme.readPressure() / 100.0F;
-
-    Serial.print("HX711 scale.get_units(5): ");
-    Serial.println(scale.get_units(5), 3);
-
-    Serial.print("Load cell raw data (average): ");
-    Serial.print(rawValue, 3);
-    Serial.println(" (calibrated units)");
-
-    Serial.print("Temperature: ");
-    Serial.print(temperature, 2);
-    Serial.println(" °C");
-
-    Serial.print("Humidity: ");
-    Serial.print(humidity, 2);
-    Serial.println(" %");
-
-    Serial.print("Pressure: ");
-    Serial.print(pressure, 2);
-    Serial.println(" hPa");
-  }
-  else
-  {
-    Serial.println("Error: HX711 not ready!");
-  }
-  Serial.println("=== End of Sensor Data ===\n");
-}
-
-// Persistent menu loop that prevents deep sleep until exit is selected
-void menuLoop()
-{
-  bool inMenu = true;
-  while (inMenu)
-  {
-    showMenu();
-    while (Serial.available() == 0)
-    {
-      // Waiting for user input
-    }
-    char option = Serial.read();
-    while (Serial.available() > 0)
-    {
-      Serial.read();
-    }
-    switch (option)
-    {
-    case '1':
-      calibrateScale();
-      break;
-    case '2':
-      setTare();
-      break;
-    case '3':
-      clearEEPROM();
-      break;
-    case '4':
-      showSensorData();
-      break;
-    case '5':
-      Serial.println("Exiting menu. Resuming normal operation...");
-      inMenu = false;
-      break;
-    default:
-      Serial.println("Invalid option. Please select again.");
-      break;
-    }
-    delay(200);
-  }
+  ArduinoOTA.setHostname("esp32-plant-scale");
+  ArduinoOTA.onStart([]()
+                     { Serial.println("Start OTA update..."); });
+  ArduinoOTA.onEnd([]()
+                   { Serial.println("\nOTA update complete."); });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
+                        { Serial.printf("OTA Progress: %u%%\r", (progress / (total / 100))); });
+  ArduinoOTA.onError([](ota_error_t error)
+                     {
+      Serial.printf("OTA Error[%u]: ", error);
+      if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+      else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+      else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+      else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+      else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
+  ArduinoOTA.begin();
 }
 
 void setup()
@@ -381,69 +62,32 @@ void setup()
   EEPROM.begin(EEPROM_SIZE);
   delay(100);
 
-  // Load stored calibration factor from EEPROM
-  EEPROM.get(EEPROM_CALIB_ADDR, calibrationFactor);
-  if (isnan(calibrationFactor) || calibrationFactor == 0)
-  {
-    calibrationFactor = 1.0;
-  }
-  Serial.print("Stored calibration factor: ");
-  Serial.println(calibrationFactor, 6);
+  pinMode(PIN_BAT_VOLT, INPUT);
 
-  // Load and apply stored tare offset
-  EEPROM.get(EEPROM_TARE_ADDR, tareOffset);
-  if (isnan(tareOffset))
-  {
-    tareOffset = 0.0;
-  }
-  Serial.print("Stored tare offset: ");
-  Serial.println(tareOffset, 3);
+  // Load calibration data from EEPROM
+  loadCalibrationData();
 
-  // Connect to WiFi
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nConnected to WiFi");
+  // Initialize network and connect to WiFi
+  initializeNetwork();
+  connectToWiFi();
 
-  // Initialize ThingSpeak
-  ThingSpeak.begin(client);
+  // Initialize sensors
+  initializeSensors();
 
-  // Initialize custom I²C pins
-  Wire.begin(SDA_PIN, SCL_PIN);
-
-  // Initialize BME280 sensor (I2C address 0x76)
-  if (!bme.begin(0x76))
-  {
-    Serial.println("Could not find a valid BME280 sensor, check wiring!");
-    while (1)
-    {
-      delay(1000);
-    }
-  }
-
-  // Initialize HX711
-  scale.begin(DOUT_PIN, SCK_PIN);
-  scale.set_scale(calibrationFactor);
-  scale.set_offset(tareOffset);
-  Serial.println("HX711 started");
-  delay(500);
-
-  // Check for menu activation (5 seconds)
+  // Check for menu activation (10 seconds)
   if (firstBoot)
   {
-    Serial.println("Press any key for menu (5 seconds)...");
+    Serial.println("Press any key for menu (10 seconds)...");
     unsigned long startTime = millis();
     bool menuActivated = false;
-    while (millis() - startTime < 5000)
+    while (millis() - startTime < 10000)
     {
       if (Serial.available() > 0)
       {
         menuActivated = true;
         break;
       }
+      ArduinoOTA.handle(); // OTA-Update Ready
     }
     if (menuActivated)
     {
@@ -458,29 +102,24 @@ void setup()
 
 void loop()
 {
-  scale.power_up();
-
-  bme.setSampling(Adafruit_BME280::MODE_NORMAL,
-                  Adafruit_BME280::SAMPLING_X1, // Temperature
-                  Adafruit_BME280::SAMPLING_X1, // Pressure
-                  Adafruit_BME280::SAMPLING_X1, // Humidity
-                  Adafruit_BME280::FILTER_OFF,
-                  Adafruit_BME280::STANDBY_MS_0_5);
-
-  delay(500);
+  // Power up sensors
+  powerUpSensors();
 
   if (waitForScaleReady(5000))
   {
-    // Get calibrated weight reading (tare is already subtracted)
+    // Get calibrated weight reading
     float weight = getFilteredWeight();
 
+    // Add to history and check for stagnation
     addWeightToHistory(weight);
-    checkForStagnation();
+    checkForStagnation(); // This function should set 'stagnationDetected' to true when stagnation is detected
 
     // Read sensor values from BME280
-    float temperature = bme.readTemperature();
-    float humidity = bme.readHumidity();
-    float pressure = bme.readPressure() / 100.0F;
+    float temperature = getTemperature();
+    float humidity = getHumidity();
+    float pressure = getPressure();
+    bool needsWatering = isWateringNeeded();
+    float batteryVoltage = readBatteryVoltage();
 
     Serial.print("Weight: ");
     Serial.print(weight, 1);
@@ -490,36 +129,30 @@ void loop()
     Serial.print(temperature, 1);
     Serial.println(" °C");
 
-    // Send data to ThingSpeak (Field 1: weight, Field 2: temperature, etc.)
-    ThingSpeak.setField(1, weight);
-    ThingSpeak.setField(2, temperature);
-    ThingSpeak.setField(3, humidity);
-    ThingSpeak.setField(4, pressure);
-    ThingSpeak.setField(5, wateringNeeded ? 1 : 0);
-    ThingSpeak.writeFields(channelID, apiKey);
+    Serial.print("Needs watering: ");
+    Serial.println(needsWatering, 1);
+
+    Serial.print("Battery Voltage: ");
+    Serial.print(batteryVoltage, 1);
+    Serial.println(" V");
+
+    // Send data to ThingSpeak using network module
+    sendSensorData(weight, temperature, humidity, pressure, needsWatering, batteryVoltage);
   }
   else
   {
     Serial.println("Error: HX711 not ready!");
   }
 
-  Serial.println("Turning off HX711 and BME280...");
-  scale.power_down();
-
-  bme.setSampling(Adafruit_BME280::MODE_SLEEP,
-                  Adafruit_BME280::SAMPLING_NONE, // Temperature
-                  Adafruit_BME280::SAMPLING_NONE, // Pressure
-                  Adafruit_BME280::SAMPLING_NONE, // Humidity
-                  Adafruit_BME280::FILTER_OFF,
-                  Adafruit_BME280::STANDBY_MS_0_5);
+  Serial.println("Turning off sensors...");
+  powerDownSensors();
 
   Serial.println("Entering deep sleep mode...");
   delay(500);
 
-  // Put ESP32 into deep sleep
-  client.stop();
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
+  // Disconnect network
+  disconnectNetwork();
+
   Serial.end();
   Wire.end();
   btStop();

@@ -35,9 +35,9 @@ git clone <your-repo-url>
 ```
 
 2. Rename and configure credentials:
-   - Locate the file `src/cred_example.h`.
+   - Locate the file `cred_example.cpp`.
    - Enter your Wi-Fi and ThingSpeak credentials.
-   - Rename it to `cred.h`.
+   - Rename it to `cred.cpp` and move to `src` folder.
 
 3. Upload the sketch to your ESP32 using Arduino IDE or PlatformIO.
 
