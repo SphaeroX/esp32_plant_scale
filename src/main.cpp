@@ -8,7 +8,6 @@
 #include "eeprom_handler.h"
 #include <Wire.h>
 #include <ArduinoOTA.h>
-#include <esp_adc_cal.h>
 
 // Track if this is the first boot since power-on
 RTC_DATA_ATTR bool firstBoot = true;
@@ -81,12 +80,13 @@ void setup()
     bool menuActivated = false;
     while (millis() - startTime < 10000)
     {
+      ArduinoOTA.handle(); // OTA-Update Ready
+
       if (Serial.available() > 0)
       {
         menuActivated = true;
         break;
       }
-      ArduinoOTA.handle(); // OTA-Update Ready
     }
     if (menuActivated)
     {
@@ -111,7 +111,7 @@ void loop()
 
     // Add to history and check for stagnation
     addWeightToHistory(weight);
-    checkForStagnation(); // This function should set 'stagnationDetected' to true when stagnation is detected
+    checkForStagnation();
 
     // Read sensor values from BME280
     float temperature = getTemperature();

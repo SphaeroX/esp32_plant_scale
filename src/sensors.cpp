@@ -14,7 +14,6 @@ bool wateringNeeded = false;
 RTC_DATA_ATTR float weightHistory[HISTORY_SIZE] = {0};
 RTC_DATA_ATTR int historyIndex = 0;
 RTC_DATA_ATTR int readingCount = 0;
-RTC_DATA_ATTR bool historyReady = false;
 
 // Stagnation detection variables
 RTC_DATA_ATTR float referenceAvgWeight = 0.0;
@@ -92,17 +91,12 @@ void addWeightToHistory(float weight)
   weightHistory[historyIndex] = weight;
   historyIndex = (historyIndex + 1) % HISTORY_SIZE;
   readingCount++;
-
-  if (historyIndex == 0 && !historyReady)
-  {
-    historyReady = true;
-  }
 }
 
 void checkForStagnation()
 {
   // Check if enough data is available
-  if (!historyReady || readingCount < (IGNORE_FIRST_READINGS + HISTORY_SIZE))
+  if (readingCount < (IGNORE_FIRST_READINGS + HISTORY_SIZE))
   {
     Serial.println("Initialization phase: " + String(readingCount) + "/" +
                    String(IGNORE_FIRST_READINGS + HISTORY_SIZE));

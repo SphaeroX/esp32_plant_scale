@@ -17,12 +17,12 @@
 #define EEPROM_CALIB_ADDR 4 // EEPROM address for calibration factor (4 bytes)
 
 // Measurement Settings
-#define NUM_MEASUREMENTS 10     // Number of measurements per weight value
-#define HISTORY_SIZE 10         // Number of stored weight values for evaluation
+#define HISTORY_SIZE 7          // Number of stored weight values for evaluation
 #define IGNORE_FIRST_READINGS 3 // Number of initial measurements to ignore after startup
+#define NUM_MEASUREMENTS 10     // Number of measurements per weight value
 
 // Stagnation Detection Settings
-#define MIN_VALID_DROPS 5        // Minimum number of valid drops required from HISTORY_SIZE
-#define VALID_DROP_THRESHOLD 1.2 // Minimum drop (in grams) to consider a value valid
+#define MIN_VALID_DROPS 3        // Minimum number of valid drops required from HISTORY_SIZE
+#define VALID_DROP_THRESHOLD 1.3 // Minimum drop (in grams) to consider a value valid
 
 #endif // CONFIG_H
