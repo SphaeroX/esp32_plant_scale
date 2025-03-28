@@ -136,7 +136,7 @@ void loop()
     Serial.println(" V");
 
     // Send data to ThingSpeak using network module
-    sendSensorData(weight, temperature, humidity, pressure, needsWatering, batteryVoltage);
+    sendSensorData(weight, temperature, humidity, pressure, batteryVoltage, needsWatering);
   }
   else
   {
