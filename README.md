@@ -38,11 +38,11 @@ This approach helps to avoid false positives due to measurement noise or tempora
 
 | Component        | Description                             |
 |------------------|-----------------------------------------|
-| ESP32            | Preferably with 18650 battery support   |
+| ESP32            | Preferably LILYGO® TTGO T-Display       |
 | HX711            | Load cell amplifier                     |
-| Load Cell        | 5 kg recommended                        |
+| Load Cell        | 5 kg recommended or whatever u need     |
 | BME280           | I²C sensor for temperature/humidity     |
-| 18650 Battery    | Power supply                            |
+| LiPo Battery     | Power supply                            |
 
 GPIO configuration:
 
